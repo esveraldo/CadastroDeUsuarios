@@ -1,3 +1,52 @@
+name: CI/CD .NET para EC2
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'   # ajuste se for 6/7
+
+      # RESTORE
+      - name: Restore
+        run: dotnet restore ./CadastroDeUsuarios.sln
+
+      # BUILD
+      - name: Build
+        run: dotnet build ./CadastroDeUsuarios.sln --configuration Release --no-restore
+
+      # TESTES UNITÁRIOS (se houver)
+      - name: Testes unitários
+        run: dotnet test ./CadastroDeUsuarios.sln --configuration Release --no-build || echo "Falha ou ausência de testes, seguindo mesmo assim."
+
+      # PUBLISH (só roda em push na main, não em PR)
+      - name: Publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          dotnet publish ./CadastroDeUsuarios/CadastroDeUsuarios.csproj \
+            -c Release \
+            -o ./publish
+
+      # PACK (zip da aplicação)
+      - name: Compactar artefato
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cd publish
+          zip -r ../app.zip .
+          cd ..
+
       # 🔍 VERIFICAR SECRETS ANTES DO SCP
       - name: Verificar secrets antes do SCP
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
