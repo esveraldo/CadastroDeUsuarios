@@ -1,53 +1,4 @@
-name: CI/CD .NET para EC2
-
-on:
-  push:
-    branches: [ main ]   # ou outra branch de deploy
-  pull_request:
-    branches: [ main, develop ]
-
-jobs:
-  build-test-deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'   # ajuste se for 6/7
-
-      # RESTORE
-      - name: Restore
-        run: dotnet restore ./CadastroDeUsuarios.sln
-
-      # BUILD
-      - name: Build
-        run: dotnet build ./CadastroDeUsuarios.sln --configuration Release --no-restore
-
-      # TESTES UNITÁRIOS (se houver)
-      - name: Testes unitários
-        run: dotnet test ./CadastroDeUsuarios.sln --configuration Release --no-build || echo "Falha ou ausência de testes, seguindo mesmo assim."
-
-      # PUBLISH (só roda em push na main, não em PR)
-      - name: Publish
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          dotnet publish ./CadastroDeUsuarios/CadastroDeUsuarios.csproj \
-            -c Release \
-            -o ./publish
-
-      # PACK (zip da aplicação)
-      - name: Compactar artefato
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          cd publish
-          zip -r ../app.zip .
-          cd ..
-
-      # 🔍 VERIFICAR SECRETS ANTES DO SCP  (ADICIONADO AQUI)
+      # 🔍 VERIFICAR SECRETS ANTES DO SCP
       - name: Verificar secrets antes do SCP
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -60,28 +11,29 @@ jobs:
             echo "EC2_SSH_KEY está definido (conteúdo não será exibido)."
           fi
 
-      # COPIAR PARA EC2
-      - name: Copiar app para EC2 via SCP
+      # CRIAR ARQUIVO DE CHAVE PRIVADA NO RUNNER
+      - name: Criar arquivo de chave SSH
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "app.zip"
-          target: "/tmp/app.zip"
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ec2
+          chmod 600 ~/.ssh/id_ec2
 
-      # DEPLOY NA EC2 (descompactar, mover e restartar serviço)
-      - name: Deploy na EC2
+      # COPIAR ARQUIVO PARA EC2 VIA SCP (SEM ACTION EXTERNO)
+      - name: Copiar app.zip para EC2 via scp
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
+        run: |
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ec2 app.zip \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/app.zip
+
+      # DEPLOY NA EC2 VIA SSH (SEM ACTION EXTERNO)
+      - name: Deploy na EC2 via ssh
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ec2 ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
             sudo systemctl stop CadastroDeUsuarios || true
-            rm -rf ${{ secrets.EC2_DEPLOY_PATH }}/*
-            unzip -o /tmp/app.zip -d ${{ secrets.EC2_DEPLOY_PATH }}
+            rm -rf /var/www/CadastroDeUsuarios/*
+            unzip -o /tmp/app.zip -d /var/www/CadastroDeUsuarios
             rm /tmp/app.zip
             sudo systemctl start CadastroDeUsuarios
+          EOF
