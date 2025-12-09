@@ -1,88 +1,30 @@
-name: CI/CD .NET para EC2
+name: Debug Secrets
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main, develop ]
+  workflow_dispatch:
 
 jobs:
-  build-test-deploy:
+  show-secrets:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'   # ajuste se for 6/7
-
-      # RESTORE
-      - name: Restore
-        run: dotnet restore ./CadastroDeUsuarios.sln
-
-      # BUILD
-      - name: Build
-        run: dotnet build ./CadastroDeUsuarios.sln --configuration Release --no-restore
-
-      # TESTES UNITÁRIOS (se houver)
-      - name: Testes unitários
-        run: dotnet test ./CadastroDeUsuarios.sln --configuration Release --no-build || echo "Falha ou ausência de testes, seguindo mesmo assim."
-
-      # PUBLISH (só roda em push na main, não em PR)
-      - name: Publish
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Mostrar contexto
         run: |
-          dotnet publish ./CadastroDeUsuarios/CadastroDeUsuarios.csproj \
-            -c Release \
-            -o ./publish
+          echo "GITHUB_REPOSITORY = $GITHUB_REPOSITORY"
+          echo "GITHUB_EVENT_NAME = $GITHUB_EVENT_NAME"
+          echo "GITHUB_REF        = $GITHUB_REF"
 
-      # PACK (zip da aplicação)
-      - name: Compactar artefato
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Mostrar EC2_* (secrets)
         run: |
-          cd publish
-          zip -r ../app.zip .
-          cd ..
-
-      # 🔍 VERIFICAR SECRETS ANTES DO SCP
-      - name: Verificar secrets antes do SCP
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          echo "EC2_HOST: '${{ secrets.EC2_HOST }}'"
-          echo "EC2_USER: '${{ secrets.EC2_USER }}'"
+          echo "EC2_HOST (secrets) = '${{ secrets.EC2_HOST }}'"
+          echo "EC2_USER (secrets) = '${{ secrets.EC2_USER }}'"
           if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "EC2_SSH_KEY está VAZIO ou NÃO existe!"
-            exit 1
+            echo "EC2_SSH_KEY (secrets) está VAZIO"
           else
-            echo "EC2_SSH_KEY está definido (conteúdo não será exibido)."
+            echo "EC2_SSH_KEY (secrets) ESTÁ DEFINIDO (não vou exibir)"
           fi
 
-      # CRIAR ARQUIVO DE CHAVE PRIVADA NO RUNNER
-      - name: Criar arquivo de chave SSH
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Mostrar EC2_* (vars) só pra conferir
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ec2
-          chmod 600 ~/.ssh/id_ec2
-
-      # COPIAR ARQUIVO PARA EC2 VIA SCP (SEM ACTION EXTERNO)
-      - name: Copiar app.zip para EC2 via scp
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ec2 app.zip \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/app.zip
-
-      # DEPLOY NA EC2 VIA SSH (SEM ACTION EXTERNO)
-      - name: Deploy na EC2 via ssh
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ec2 ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-            sudo systemctl stop CadastroDeUsuarios || true
-            rm -rf /var/www/CadastroDeUsuarios/*
-            unzip -o /tmp/app.zip -d /var/www/CadastroDeUsuarios
-            rm /tmp/app.zip
-            sudo systemctl start CadastroDeUsuarios
-          EOF
+          echo "EC2_HOST (vars) = '${{ vars.EC2_HOST }}'"
+          echo "EC2_USER (vars) = '${{ vars.EC2_USER }}'"
