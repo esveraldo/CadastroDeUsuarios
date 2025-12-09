@@ -47,6 +47,19 @@ jobs:
           zip -r ../app.zip .
           cd ..
 
+      # 🔍 VERIFICAR SECRETS ANTES DO SCP  (ADICIONADO AQUI)
+      - name: Verificar secrets antes do SCP
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "EC2_HOST: '${{ secrets.EC2_HOST }}'"
+          echo "EC2_USER: '${{ secrets.EC2_USER }}'"
+          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "EC2_SSH_KEY está VAZIO ou NÃO existe!"
+            exit 1
+          else
+            echo "EC2_SSH_KEY está definido (conteúdo não será exibido)."
+          fi
+
       # COPIAR PARA EC2
       - name: Copiar app para EC2 via SCP
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
