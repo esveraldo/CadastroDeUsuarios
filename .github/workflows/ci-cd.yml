@@ -28,3 +28,7 @@ jobs:
         run: |
           echo "EC2_HOST (vars) = '${{ vars.EC2_HOST }}'"
           echo "EC2_USER (vars) = '${{ vars.EC2_USER }}'"
+
+      - name: Mostrar TEST_SECRET
+        run: |
+          echo "TEST_SECRET (secrets) = '${{ secrets.TEST_SECRET }}'"
