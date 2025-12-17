@@ -25,7 +25,7 @@ jobs:
 
       - name: Verificar caminhos do projeto
         run: |
-          ls -ლა
+          ls -la
           test -f ./CadastroDeUsuarios.sln
           test -f ./CadastroDeUsuarios/CadastroDeUsuarios.csproj
 
