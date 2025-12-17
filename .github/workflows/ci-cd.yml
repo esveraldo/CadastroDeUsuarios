@@ -11,128 +11,66 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Instalar zip (runner)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: sudo apt-get update && sudo apt-get install -y zip
-
-      - name: Verificar caminhos do projeto
-        run: |
-          ls -la
-          test -f ./CadastroDeUsuarios.sln
-          test -f ./CadastroDeUsuarios/CadastroDeUsuarios.csproj
-
-      # RESTORE
       - name: Restore
         run: dotnet restore ./CadastroDeUsuarios.sln
 
-      # BUILD
       - name: Build
-        run: dotnet build ./CadastroDeUsuarios.sln --configuration Release --no-restore
+        run: dotnet build ./CadastroDeUsuarios.sln -c Release --no-restore
 
-      # TESTES UNITÁRIOS (se houver)
-      - name: Testes unitários
-        run: dotnet test ./CadastroDeUsuarios.sln --configuration Release --no-build || echo "Sem testes ou falha, seguindo mesmo assim."
+      - name: Test
+        run: dotnet test ./CadastroDeUsuarios.sln -c Release --no-build || echo "Sem testes/ falha, seguindo."
 
-      # PUBLISH (só em push na main)
       - name: Publish
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          dotnet publish ./CadastroDeUsuarios/CadastroDeUsuarios.csproj \
-            -c Release \
-            -o ./publish
+          dotnet publish ./CadastroDeUsuarios/CadastroDeUsuarios.csproj -c Release -o ./publish
 
-      # PACK (zip da aplicação)
-      - name: Compactar artefato
+      - name: Zip
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
           cd publish
           zip -r ../app.zip .
           cd ..
-          ls -la app.zip
 
-      # DEBUG SECRETS
-      - name: Debug secrets básicos
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          echo "EC2_HOST: '${{ secrets.EC2_HOST }}'"
-          echo "EC2_USER: '${{ secrets.EC2_USER }}'"
-          echo "EC2_DEPLOY_PATH: '${{ secrets.EC2_DEPLOY_PATH }}'"
-          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "EC2_SSH_KEY está VAZIO OU NÃO EXISTE!"
-            exit 1
-          else
-            echo "EC2_SSH_KEY está definido (não exibido)."
-          fi
-
-      # CRIAR ARQUIVO DE CHAVE PRIVADA NO RUNNER (com quebras de linha)
-      - name: Criar arquivo de chave SSH
+      - name: Criar chave SSH
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ec2
+          cat > ~/.ssh/id_ec2 << 'KEY'
+          ${{ secrets.EC2_SSH_KEY }}
+          KEY
           chmod 600 ~/.ssh/id_ec2
 
-      # COPIAR PARA EC2 VIA SCP
-      - name: Copiar app.zip para EC2 via scp
+      - name: Enviar zip (SCP)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          scp \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=30 \
-            -i ~/.ssh/id_ec2 \
-            app.zip \
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i ~/.ssh/id_ec2 app.zip \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/app.zip
 
-      # DEPLOY VIA SSH
-      - name: Deploy na EC2 via ssh
+      - name: Deploy (SSH)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          ssh \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=3 \
-            -o ConnectTimeout=30 \
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -i ~/.ssh/id_ec2 \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
 
-            echo "== Verificando dependências na EC2 =="
-            if ! command -v unzip >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y unzip
-            fi
-
-            if ! command -v dotnet >/dev/null 2>&1; then
-              echo "dotnet não encontrado. Instalando runtime .NET 8..."
-              sudo apt-get update
-              sudo apt-get install -y dotnet-runtime-8.0
-            fi
-
-            echo "== Preparando pasta de deploy =="
-            sudo mkdir -p "${{ secrets.EC2_DEPLOY_PATH }}"
-            sudo chown -R \$USER:\$USER "${{ secrets.EC2_DEPLOY_PATH }}"
-
-            echo "== Parando serviço =="
             sudo systemctl stop CadastroDeUsuarios || true
 
-            echo "== Limpando release antiga =="
+            sudo mkdir -p "${{ secrets.EC2_DEPLOY_PATH }}"
             sudo rm -rf "${{ secrets.EC2_DEPLOY_PATH }}"/*
-
-            echo "== Descompactando nova versão =="
-            unzip -o /tmp/app.zip -d "${{ secrets.EC2_DEPLOY_PATH }}"
+            sudo unzip -o /tmp/app.zip -d "${{ secrets.EC2_DEPLOY_PATH }}"
             rm -f /tmp/app.zip
 
-            echo "== Subindo serviço =="
             sudo systemctl daemon-reload
             sudo systemctl start CadastroDeUsuarios
             sudo systemctl status CadastroDeUsuarios --no-pager -l
