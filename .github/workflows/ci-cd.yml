@@ -17,7 +17,17 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'   # ajuste se for 6/7
+          dotnet-version: '8.0.x'
+
+      - name: Instalar zip (runner)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Verificar caminhos do projeto
+        run: |
+          ls -ლა
+          test -f ./CadastroDeUsuarios.sln
+          test -f ./CadastroDeUsuarios/CadastroDeUsuarios.csproj
 
       # RESTORE
       - name: Restore
@@ -29,9 +39,9 @@ jobs:
 
       # TESTES UNITÁRIOS (se houver)
       - name: Testes unitários
-        run: dotnet test ./CadastroDeUsuarios.sln --configuration Release --no-build || echo "Falha ou ausência de testes, seguindo mesmo assim."
+        run: dotnet test ./CadastroDeUsuarios.sln --configuration Release --no-build || echo "Sem testes ou falha, seguindo mesmo assim."
 
-      # PUBLISH (só roda em push na main, não em PR)
+      # PUBLISH (só em push na main)
       - name: Publish
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -46,43 +56,84 @@ jobs:
           cd publish
           zip -r ../app.zip .
           cd ..
+          ls -la app.zip
 
-      # 🔍 VERIFICAR SECRETS ANTES DO SCP
-      - name: Verificar secrets antes do SCP
+      # DEBUG SECRETS
+      - name: Debug secrets básicos
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           echo "EC2_HOST: '${{ secrets.EC2_HOST }}'"
           echo "EC2_USER: '${{ secrets.EC2_USER }}'"
+          echo "EC2_DEPLOY_PATH: '${{ secrets.EC2_DEPLOY_PATH }}'"
           if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "EC2_SSH_KEY está VAZIO ou NÃO existe!"
+            echo "EC2_SSH_KEY está VAZIO OU NÃO EXISTE!"
             exit 1
           else
-            echo "EC2_SSH_KEY está definido (conteúdo não será exibido)."
+            echo "EC2_SSH_KEY está definido (não exibido)."
           fi
 
-      # CRIAR ARQUIVO DE CHAVE PRIVADA NO RUNNER
+      # CRIAR ARQUIVO DE CHAVE PRIVADA NO RUNNER (com quebras de linha)
       - name: Criar arquivo de chave SSH
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ec2
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ec2
           chmod 600 ~/.ssh/id_ec2
 
-      # COPIAR ARQUIVO PARA EC2 VIA SCP (SEM ACTION EXTERNO)
+      # COPIAR PARA EC2 VIA SCP
       - name: Copiar app.zip para EC2 via scp
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_ec2 app.zip \
+          scp \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=30 \
+            -i ~/.ssh/id_ec2 \
+            app.zip \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/app.zip
 
-      # DEPLOY NA EC2 VIA SSH (SEM ACTION EXTERNO)
+      # DEPLOY VIA SSH
       - name: Deploy na EC2 via ssh
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ec2 ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -o ConnectTimeout=30 \
+            -i ~/.ssh/id_ec2 \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
+            set -e
+
+            echo "== Verificando dependências na EC2 =="
+            if ! command -v unzip >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y unzip
+            fi
+
+            if ! command -v dotnet >/dev/null 2>&1; then
+              echo "dotnet não encontrado. Instalando runtime .NET 8..."
+              sudo apt-get update
+              sudo apt-get install -y dotnet-runtime-8.0
+            fi
+
+            echo "== Preparando pasta de deploy =="
+            sudo mkdir -p "${{ secrets.EC2_DEPLOY_PATH }}"
+            sudo chown -R \$USER:\$USER "${{ secrets.EC2_DEPLOY_PATH }}"
+
+            echo "== Parando serviço =="
             sudo systemctl stop CadastroDeUsuarios || true
-            rm -rf /var/www/CadastroDeUsuarios/*
-            unzip -o /tmp/app.zip -d /var/www/CadastroDeUsuarios
-            rm /tmp/app.zip
+
+            echo "== Limpando release antiga =="
+            sudo rm -rf "${{ secrets.EC2_DEPLOY_PATH }}"/*
+
+            echo "== Descompactando nova versão =="
+            unzip -o /tmp/app.zip -d "${{ secrets.EC2_DEPLOY_PATH }}"
+            rm -f /tmp/app.zip
+
+            echo "== Subindo serviço =="
+            sudo systemctl daemon-reload
             sudo systemctl start CadastroDeUsuarios
+            sudo systemctl status CadastroDeUsuarios --no-pager -l
           EOF
